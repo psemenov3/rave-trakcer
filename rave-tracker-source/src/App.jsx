@@ -8,9 +8,10 @@ import FriendCard from './components/FriendCard.jsx'
 import CalibrationOverlay from './components/CalibrationOverlay.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
 import { useWakeLock } from './useWakeLock.js'
+import { startLocationWatch } from './locationService.js'
 
 // Bump this on each release; it shows on the home screen.
-const VERSION = 'v4.5.0'
+const VERSION = 'v4.6.0'
 
 // Drop members from the radar if we haven't seen an update in this long.
 const FRESH_MS = 3 * 60 * 1000
@@ -69,7 +70,7 @@ export default function App() {
   const compassWorking = isCalibrated(working, accuracy)
 
   const myId = useRef(crypto.randomUUID())
-  const watchId = useRef(null)
+  const stopWatch = useRef(null) // function to stop the location watch
   const unsubscribe = useRef(null)
   const messagesUnsub = useRef(null)
   const lastSeenMsgs = useRef(0)
@@ -105,8 +106,7 @@ export default function App() {
 
   // Write my latest position into the group.
   const pushLocation = useCallback(
-    async (position, groupCode) => {
-      const location = { lat: position.coords.latitude, lng: position.coords.longitude }
+    async (location, groupCode) => {
       setMyPos(location)
       setGpsStatus('active')
       try {
@@ -140,14 +140,15 @@ export default function App() {
       onDisconnect(meRef).remove()
       armedRef.current = 'me'
 
-      watchId.current = navigator.geolocation.watchPosition(
-        (position) => pushLocation(position, groupCode),
+      startLocationWatch(
+        (loc) => pushLocation(loc, groupCode),
         () => {
           setError('Location access denied. Allow location and reload.')
           setGpsStatus('error')
-        },
-        { enableHighAccuracy: true, maximumAge: 4000 }
-      )
+        }
+      ).then((stop) => {
+        stopWatch.current = stop
+      })
 
       unsubscribe.current = onValue(ref(db, `groups/${groupCode}/members`), (snap) => {
         const val = snap.val()
@@ -227,7 +228,7 @@ export default function App() {
   }
 
   const leaveGroup = () => {
-    if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current)
+    if (stopWatch.current) { stopWatch.current(); stopWatch.current = null }
     const meRef = ref(db, `groups/${code}/members/${myId.current}`)
     const groupRef = ref(db, `groups/${code}`)
     onDisconnect(meRef).cancel().catch(() => {})

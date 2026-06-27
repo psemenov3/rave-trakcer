@@ -1,0 +1,8 @@
+{
+  "appId": "com.findyourcrew.app",
+  "appName": "Find Your Crew",
+  "webDir": "dist",
+  "android": {
+    "allowMixedContent": false
+  }
+}
