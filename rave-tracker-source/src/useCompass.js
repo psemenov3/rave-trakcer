@@ -1,0 +1,90 @@
+import { useState, useRef, useCallback, useEffect } from 'react'
+
+// Current screen rotation in degrees (0 portrait, 90/270 landscape).
+// Needed so the arrow stays correct when the phone is held sideways.
+function screenAngle() {
+  if (typeof screen !== 'undefined' && screen.orientation && typeof screen.orientation.angle === 'number') {
+    return screen.orientation.angle
+  }
+  if (typeof window !== 'undefined' && typeof window.orientation === 'number') {
+    return window.orientation
+  }
+  return 0
+}
+
+// Turn a DeviceOrientationEvent into a compass heading: degrees clockwise from
+// north for the direction the TOP of the screen is pointing.
+function readHeading(e) {
+  // iOS gives a ready-made, true-north compass heading (already clockwise).
+  if (typeof e.webkitCompassHeading === 'number' && !Number.isNaN(e.webkitCompassHeading)) {
+    return (e.webkitCompassHeading + screenAngle() + 360) % 360
+  }
+  // Standards/Android: alpha is counter-clockwise from north -> flip it.
+  if (e.alpha != null) {
+    return (360 - e.alpha + screenAngle() + 360) % 360
+  }
+  return null
+}
+
+// Compass hook: returns a smoothed heading, whether it's working yet, and a
+// permission requester (needed on iOS 13+).
+//
+// Why the old version pointed the wrong way:
+//   * it only listened to "deviceorientation", whose `alpha` on Android is
+//     relative to where the phone booted up, NOT true north;
+//   * it never compensated for screen rotation;
+//   * it averaged 12 raw samples, which lagged badly when you turned.
+// This version prefers the absolute (true-north) event, compensates for screen
+// angle, and uses light circular smoothing so it's responsive but stable.
+export function useCompass() {
+  const [heading, setHeading] = useState(0)
+  const [working, setWorking] = useState(false)
+  const smooth = useRef(null)        // running {s, c} unit-vector average
+  const haveAbsolute = useRef(false) // have we received a true-north reading?
+
+  const onEvent = useCallback((e) => {
+    const absolute = e.absolute === true || typeof e.webkitCompassHeading === 'number'
+    // Once we have true-north data, ignore the relative fallback entirely.
+    if (absolute) haveAbsolute.current = true
+    else if (haveAbsolute.current) return
+
+    const h = readHeading(e)
+    if (h == null) return
+
+    const rad = (h * Math.PI) / 180
+    const s = Math.sin(rad)
+    const c = Math.cos(rad)
+    const k = 0.25 // smoothing: higher = snappier, lower = smoother
+    if (smooth.current == null) {
+      smooth.current = { s, c }
+    } else {
+      smooth.current.s += (s - smooth.current.s) * k
+      smooth.current.c += (c - smooth.current.c) * k
+    }
+    const avg = (Math.atan2(smooth.current.s, smooth.current.c) * 180) / Math.PI
+    setHeading((avg + 360) % 360)
+    setWorking(true)
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener('deviceorientationabsolute', onEvent, true)
+    window.addEventListener('deviceorientation', onEvent, true)
+    return () => {
+      window.removeEventListener('deviceorientationabsolute', onEvent, true)
+      window.removeEventListener('deviceorientation', onEvent, true)
+    }
+  }, [onEvent])
+
+  const requestPermission = useCallback(async () => {
+    try {
+      const DOE = typeof DeviceOrientationEvent !== 'undefined' ? DeviceOrientationEvent : null
+      if (DOE && typeof DOE.requestPermission === 'function') {
+        await DOE.requestPermission()
+      }
+    } catch (err) {
+      console.warn('Compass permission denied', err)
+    }
+  }, [])
+
+  return { heading, working, requestPermission }
+}

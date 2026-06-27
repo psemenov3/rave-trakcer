@@ -1,0 +1,10 @@
+# Netlify build + deploy settings for the Vite app.
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+# Single-page app fallback: send all routes to index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

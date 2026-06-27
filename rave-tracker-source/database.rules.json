@@ -1,0 +1,30 @@
+{
+  "rules": {
+    "groups": {
+      // Deny reading/listing the whole groups collection.
+      // This stops anyone from enumerating every active group code
+      // (the leak that exposed all groups at once).
+      ".read": false,
+      ".write": false,
+
+      "$groupId": {
+        // A specific group is only reachable if you already know its code.
+        // (Matches the app's design: the code is the shared "key".)
+        ".read": true,
+        ".write": true,
+
+        "members": {
+          "$memberId": {
+            // Each member record must be a small object and is required to
+            // carry coordinates. Tighten/rename these fields to match your
+            // exact schema if they differ.
+            ".validate": "newData.hasChildren()",
+            "lat": { ".validate": "newData.isNumber()" },
+            "lng": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": true }
+          }
+        }
+      }
+    }
+  }
+}
