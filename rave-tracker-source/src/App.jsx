@@ -1,11 +1,14 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ref, set, onValue, remove } from 'firebase/database'
+import { ref, set, onValue, remove, onDisconnect } from 'firebase/database'
 import { db } from './firebase.js'
 import { generateCode } from './geo.js'
 import { COLORS, EMOJIS, primaryButton, secondaryButton, styles } from './styles.js'
 import { useCompass, isCalibrated } from './useCompass.js'
 import FriendCard from './components/FriendCard.jsx'
 import CalibrationOverlay from './components/CalibrationOverlay.jsx'
+
+// Bump this on each release; it shows on the home screen.
+const VERSION = 'v4.1.0'
 
 export default function App() {
   const [screen, setScreen] = useState('home')   // 'home' | 'setup' | 'tracker'
@@ -66,6 +69,12 @@ export default function App() {
         return
       }
       setGpsStatus('requesting')
+
+      // If this client disconnects (tab closed, app killed, signal lost, dead
+      // battery), Firebase auto-removes our member record. When the last member
+      // drops out, the now-empty group is pruned automatically.
+      onDisconnect(ref(db, `groups/${groupCode}/members/${myId.current}`)).remove()
+
       watchId.current = navigator.geolocation.watchPosition(
         (position) => pushLocation(position, groupCode),
         () => {
@@ -109,7 +118,9 @@ export default function App() {
 
   const leaveGroup = () => {
     if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current)
-    remove(ref(db, `groups/${code}/members/${myId.current}`)).catch(() => {})
+    const meRef = ref(db, `groups/${code}/members/${myId.current}`)
+    onDisconnect(meRef).cancel().catch(() => {})
+    remove(meRef).catch(() => {})
     if (unsubscribe.current) unsubscribe.current()
     setFriends([])
     setMyPos(null)
@@ -368,6 +379,10 @@ export default function App() {
           Location shared only within your group
           <br />
           and removed when you leave
+        </div>
+
+        <div style={{ marginTop: 16, color: 'rgba(255,255,255,0.18)', fontSize: 11, fontFamily: "'Space Mono', monospace", letterSpacing: '0.1em' }}>
+          {VERSION}
         </div>
       </div>
     </div>
