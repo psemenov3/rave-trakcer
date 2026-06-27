@@ -8,14 +8,27 @@ import FriendCard from './components/FriendCard.jsx'
 import CalibrationOverlay from './components/CalibrationOverlay.jsx'
 
 // Bump this on each release; it shows on the home screen.
-const VERSION = 'v4.1.0'
+const VERSION = 'v4.2.0'
+
+// Load the saved profile (name/emoji/color) from previous visits.
+function loadProfile() {
+  try {
+    return {
+      name: localStorage.getItem('rt_name') || '',
+      emoji: localStorage.getItem('rt_emoji') || EMOJIS[0],
+      color: localStorage.getItem('rt_color') || COLORS[0],
+    }
+  } catch {
+    return { name: '', emoji: EMOJIS[0], color: COLORS[0] }
+  }
+}
 
 export default function App() {
   const [screen, setScreen] = useState('home')   // 'home' | 'setup' | 'tracker'
   const [mode, setMode] = useState('create')      // 'create' | 'join'
-  const [name, setName] = useState('')
-  const [emoji, setEmoji] = useState(EMOJIS[0])
-  const [color, setColor] = useState(COLORS[0])
+  const [name, setName] = useState(() => loadProfile().name)
+  const [emoji, setEmoji] = useState(() => loadProfile().emoji)
+  const [color, setColor] = useState(() => loadProfile().color)
   const [code, setCode] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [myPos, setMyPos] = useState(null)
@@ -24,6 +37,7 @@ export default function App() {
   const [error, setError] = useState('')
   const [radarAngle, setRadarAngle] = useState(0)
   const [showCalibration, setShowCalibration] = useState(false)
+  const [copied, setCopied] = useState(false)
 
   const { heading, working, accuracy, requestPermission } = useCompass()
   // compassWorking now means "is the compass actually calibrated".
@@ -38,6 +52,15 @@ export default function App() {
     const id = setInterval(() => setRadarAngle((a) => (a + 1.5) % 360), 30)
     return () => clearInterval(id)
   }, [])
+
+  // Remember the profile across visits.
+  useEffect(() => {
+    try {
+      localStorage.setItem('rt_name', name)
+      localStorage.setItem('rt_emoji', emoji)
+      localStorage.setItem('rt_color', color)
+    } catch {}
+  }, [name, emoji, color])
 
   // Write my latest position into the group.
   const pushLocation = useCallback(
@@ -129,6 +152,23 @@ export default function App() {
     setScreen('home')
   }
 
+  // Share the group code via the native share sheet, with a clipboard fallback.
+  const shareCode = async () => {
+    const url = window.location.origin
+    const text = `Find your crew 📡 Join my group on ${url} with code ${code}`
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Find Your Crew', text, url })
+      } else {
+        await navigator.clipboard.writeText(text)
+        setCopied(true)
+        setTimeout(() => setCopied(false), 2000)
+      }
+    } catch {
+      /* user cancelled or share failed — ignore */
+    }
+  }
+
   // ---- TRACKER SCREEN -----------------------------------------------------
   if (screen === 'tracker') {
     return (
@@ -216,6 +256,25 @@ export default function App() {
           <div style={{ fontSize: 12, color: 'rgba(0,255,212,0.7)', lineHeight: 1.5 }}>
             📡 Share code <strong style={{ letterSpacing: '0.08em' }}>{code}</strong> — friends tap <em>Join Group</em> on the home screen
           </div>
+          <button
+            onClick={shareCode}
+            style={{
+              marginTop: 10,
+              width: '100%',
+              padding: '10px',
+              background: 'rgba(0,255,212,0.12)',
+              border: '1px solid rgba(0,255,212,0.3)',
+              borderRadius: 10,
+              color: '#00FFD4',
+              fontSize: 13,
+              fontWeight: 700,
+              cursor: 'pointer',
+              fontFamily: "'Space Grotesk', sans-serif",
+              letterSpacing: '0.05em',
+            }}
+          >
+            {copied ? '✓ Copied to clipboard' : '📤 Share Code'}
+          </button>
         </div>
 
         {friends.length === 0 ? (
