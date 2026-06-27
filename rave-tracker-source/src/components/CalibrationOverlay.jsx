@@ -1,25 +1,50 @@
 import { useState, useRef, useEffect } from 'react'
 import { primaryButton, secondaryButton } from '../styles.js'
+import { GOOD_ACCURACY } from '../useCompass.js'
 
-// Guided figure-8 calibration. Moving the phone in a figure-8 is what actually
-// prompts the OS to recalibrate the magnetometer; this just coaches the user
-// through it and gives visual feedback.
-export default function CalibrationOverlay({ onDone, compassWorking }) {
+// Guided figure-8 calibration.
+//
+// On iOS this is now REAL: while you trace the figure-8, the progress bar is
+// driven by the live `accuracy` (webkitCompassAccuracy) and only completes once
+// the heading uncertainty drops to a good level. On platforms that don't report
+// accuracy (Android/desktop), it falls back to a timed animation while you do
+// the same physical figure-8 motion the OS uses to recalibrate.
+export default function CalibrationOverlay({ onDone, calibrated, accuracy }) {
   const [phase, setPhase] = useState(0) // 0 intro, 1 tracing, 2 done
   const [progress, setProgress] = useState(0)
   const timer = useRef(null)
+  const accRef = useRef(accuracy)
+  const goodHold = useRef(0)
+  accRef.current = accuracy
 
   const start = () => {
     setPhase(1)
     setProgress(0)
+    goodHold.current = 0
     timer.current = setInterval(() => {
+      const acc = accRef.current
       setProgress((p) => {
-        if (p >= 100) {
+        let next
+        if (acc == null) {
+          // No accuracy data: timed fallback (~4s) while user does the motion.
+          next = p + 2
+        } else if (acc < 0) {
+          // Reported but uncalibrated: hold low until the OS gets a fix.
+          next = Math.min(p + 1, 40)
+        } else {
+          // Map accuracy (0 best … 45 poor) to a 0–100 quality reading.
+          const quality = Math.max(0, Math.min(100, Math.round((1 - Math.min(acc, 45) / 45) * 100)))
+          next = Math.max(p, quality)
+        }
+        // Complete when accuracy has been good for a beat, or the timer maxes.
+        const good = acc != null && acc >= 0 && acc <= GOOD_ACCURACY
+        goodHold.current = good ? goodHold.current + 1 : 0
+        if (next >= 100 || goodHold.current >= 8) {
           clearInterval(timer.current)
           setPhase(2)
           return 100
         }
-        return p + 2
+        return next
       })
     }, 80)
   }
@@ -65,9 +90,9 @@ export default function CalibrationOverlay({ onDone, compassWorking }) {
             Calibrate Compass
           </div>
           <div style={{ color: 'rgba(255,255,255,0.55)', fontSize: 15, textAlign: 'center', lineHeight: 1.7, marginBottom: 32 }}>
-            {compassWorking
+            {calibrated
               ? 'Your compass may have drifted. Wave your phone in a figure-8 motion to recalibrate it.'
-              : 'Compass permission is needed for the arrows to point the right way.'}
+              : 'Move your phone in a figure-8 so the arrows can point the right way.'}
             <br />
             <br />
             Hold your phone flat and trace a figure-8 in the air slowly.
@@ -115,7 +140,9 @@ export default function CalibrationOverlay({ onDone, compassWorking }) {
             />
           </div>
           <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.4)', letterSpacing: '0.05em' }}>
-            Keep going… {Math.round(progress)}%
+            {accRef.current != null && accRef.current >= 0
+              ? `Keep going… heading ±${Math.round(accRef.current)}°`
+              : `Keep going… ${Math.round(progress)}%`}
           </div>
         </>
       )}

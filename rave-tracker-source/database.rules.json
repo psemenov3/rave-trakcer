@@ -1,29 +1,41 @@
 {
   "rules": {
     "groups": {
-      // Deny reading/listing the whole groups collection.
-      // This stops anyone from enumerating every active group code
-      // (the leak that exposed all groups at once).
+      // Deny reading/listing or writing the whole groups collection.
+      // Blocks enumeration of every active group code.
       ".read": false,
       ".write": false,
 
       "$groupId": {
-        // A specific group is only reachable if you already know its code.
-        // (Matches the app's design: the code is the shared "key".)
+        // A specific group is reachable only if you already know its code.
         ".read": true,
         ".write": true,
 
         "members": {
           "$memberId": {
-            // Each member record must be a small object and is required to
-            // carry coordinates. Tighten/rename these fields to match your
-            // exact schema if they differ.
-            ".validate": "newData.hasChildren()",
-            "lat": { ".validate": "newData.isNumber()" },
-            "lng": { ".validate": "newData.isNumber()" },
-            "$other": { ".validate": true }
+            // Members must carry the core fields the app writes.
+            ".validate": "newData.hasChildren(['id', 'name', 'location'])",
+
+            "id":       { ".validate": "newData.isString() && newData.val().length <= 64" },
+            "name":     { ".validate": "newData.isString() && newData.val().length <= 40" },
+            "emoji":    { ".validate": "newData.isString() && newData.val().length <= 16" },
+            "color":    { ".validate": "newData.isString() && newData.val().length <= 16" },
+            "lastSeen": { ".validate": "newData.isNumber()" },
+
+            "location": {
+              ".validate": "newData.hasChildren(['lat', 'lng'])",
+              "lat": { ".validate": "newData.isNumber() && newData.val() >= -90  && newData.val() <= 90" },
+              "lng": { ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180" },
+              "$locOther": { ".validate": false }
+            },
+
+            // Reject any unexpected fields on a member.
+            "$memberOther": { ".validate": false }
           }
-        }
+        },
+
+        // A group only ever contains "members"; reject anything else.
+        "$groupOther": { ".validate": false }
       }
     }
   }

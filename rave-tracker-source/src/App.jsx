@@ -3,7 +3,7 @@ import { ref, set, onValue, remove } from 'firebase/database'
 import { db } from './firebase.js'
 import { generateCode } from './geo.js'
 import { COLORS, EMOJIS, primaryButton, secondaryButton, styles } from './styles.js'
-import { useCompass } from './useCompass.js'
+import { useCompass, isCalibrated } from './useCompass.js'
 import FriendCard from './components/FriendCard.jsx'
 import CalibrationOverlay from './components/CalibrationOverlay.jsx'
 
@@ -22,7 +22,9 @@ export default function App() {
   const [radarAngle, setRadarAngle] = useState(0)
   const [showCalibration, setShowCalibration] = useState(false)
 
-  const { heading, working: compassWorking, requestPermission } = useCompass()
+  const { heading, working, accuracy, requestPermission } = useCompass()
+  // compassWorking now means "is the compass actually calibrated".
+  const compassWorking = isCalibrated(working, accuracy)
 
   const myId = useRef(crypto.randomUUID())
   const watchId = useRef(null)
@@ -121,7 +123,7 @@ export default function App() {
     return (
       <div style={{ ...styles.page, paddingBottom: 40 }}>
         {showCalibration && (
-          <CalibrationOverlay compassWorking={compassWorking} onDone={() => setShowCalibration(false)} />
+          <CalibrationOverlay calibrated={compassWorking} accuracy={accuracy} onDone={() => setShowCalibration(false)} />
         )}
         <div style={styles.glow('#FF2D78', 400, 0.12, -150, -150)} />
         <div style={styles.glow('#BF5FFF', 250, 0.09, undefined, undefined, 0, -100)} />
@@ -180,7 +182,7 @@ export default function App() {
           </span>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.2)', marginLeft: 8 }}>·</span>
           <span style={{ fontSize: 11, color: compassWorking ? 'rgba(0,255,136,0.5)' : 'rgba(255,230,0,0.5)', letterSpacing: '0.04em' }}>
-            {compassWorking ? `COMPASS ${Math.round(heading)}°` : 'COMPASS NOT CALIBRATED'}
+            {compassWorking ? `COMPASS ${Math.round(heading)}°${accuracy != null && accuracy >= 0 ? ` ±${Math.round(accuracy)}°` : ''}` : 'COMPASS NOT CALIBRATED'}
           </span>
           <span style={{ marginLeft: 'auto', fontSize: 11, color: 'rgba(255,255,255,0.25)' }}>
             {friends.length} {friends.length === 1 ? 'friend' : 'friends'}
