@@ -1,14 +1,15 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { ref, set, onValue, remove, onDisconnect } from 'firebase/database'
+import { ref, set, onValue, remove, onDisconnect, push } from 'firebase/database'
 import { db } from './firebase.js'
 import { generateCode } from './geo.js'
 import { COLORS, EMOJIS, primaryButton, secondaryButton, styles } from './styles.js'
 import { useCompass, isCalibrated } from './useCompass.js'
 import FriendCard from './components/FriendCard.jsx'
 import CalibrationOverlay from './components/CalibrationOverlay.jsx'
+import ChatPanel from './components/ChatPanel.jsx'
 
 // Bump this on each release; it shows on the home screen.
-const VERSION = 'v4.2.0'
+const VERSION = 'v4.3.0'
 
 // Load the saved profile (name/emoji/color) from previous visits.
 function loadProfile() {
@@ -22,6 +23,21 @@ function loadProfile() {
     return { name: '', emoji: EMOJIS[0], color: COLORS[0] }
   }
 }
+
+// Style for the Radar / Chat toggle buttons.
+const tabStyle = (active) => ({
+  flex: 1,
+  padding: '8px',
+  background: active ? 'rgba(255,255,255,0.12)' : 'rgba(255,255,255,0.04)',
+  border: active ? '1px solid rgba(255,255,255,0.25)' : '1px solid rgba(255,255,255,0.08)',
+  borderRadius: 10,
+  color: active ? '#fff' : 'rgba(255,255,255,0.5)',
+  fontSize: 13,
+  fontWeight: 700,
+  cursor: 'pointer',
+  fontFamily: "'Space Grotesk', sans-serif",
+  letterSpacing: '0.04em',
+})
 
 export default function App() {
   const [screen, setScreen] = useState('home')   // 'home' | 'setup' | 'tracker'
@@ -38,6 +54,9 @@ export default function App() {
   const [radarAngle, setRadarAngle] = useState(0)
   const [showCalibration, setShowCalibration] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [view, setView] = useState('radar') // 'radar' | 'chat'
+  const [messages, setMessages] = useState([])
+  const [unread, setUnread] = useState(0)
 
   const { heading, working, accuracy, requestPermission } = useCompass()
   // compassWorking now means "is the compass actually calibrated".
@@ -46,6 +65,8 @@ export default function App() {
   const myId = useRef(crypto.randomUUID())
   const watchId = useRef(null)
   const unsubscribe = useRef(null)
+  const messagesUnsub = useRef(null)
+  const lastSeenMsgs = useRef(0)
 
   // Spinning radar sweep for the "scanning" empty state.
   useEffect(() => {
@@ -61,6 +82,16 @@ export default function App() {
       localStorage.setItem('rt_color', color)
     } catch {}
   }, [name, emoji, color])
+
+  // Track unread chat messages while the radar view is showing.
+  useEffect(() => {
+    if (view === 'chat') {
+      lastSeenMsgs.current = messages.length
+      setUnread(0)
+    } else {
+      setUnread(Math.max(0, messages.length - lastSeenMsgs.current))
+    }
+  }, [messages, view])
 
   // Write my latest position into the group.
   const pushLocation = useCallback(
@@ -93,10 +124,10 @@ export default function App() {
       }
       setGpsStatus('requesting')
 
-      // If this client disconnects (tab closed, app killed, signal lost, dead
-      // battery), Firebase auto-removes our member record. When the last member
-      // drops out, the now-empty group is pruned automatically.
-      onDisconnect(ref(db, `groups/${groupCode}/members/${myId.current}`)).remove()
+      const meRef = ref(db, `groups/${groupCode}/members/${myId.current}`)
+      const groupRef = ref(db, `groups/${groupCode}`)
+      // Default: if we disconnect, remove just our own member record.
+      onDisconnect(meRef).remove()
 
       watchId.current = navigator.geolocation.watchPosition(
         (position) => pushLocation(position, groupCode),
@@ -106,14 +137,49 @@ export default function App() {
         },
         { enableHighAccuracy: true, maximumAge: 4000 }
       )
+
       unsubscribe.current = onValue(ref(db, `groups/${groupCode}/members`), (snap) => {
         const val = snap.val()
-        if (val) setFriends(Object.values(val).filter((m) => m.id !== myId.current))
+        const others = val ? Object.values(val).filter((m) => m.id !== myId.current) : []
+        setFriends(others)
+        // If we're the LAST member, our disconnect should wipe the whole group
+        // (members + messages) so nothing lingers. Otherwise just remove us.
+        if (others.length === 0) {
+          onDisconnect(meRef).cancel()
+          onDisconnect(groupRef).remove()
+        } else {
+          onDisconnect(groupRef).cancel()
+          onDisconnect(meRef).remove()
+        }
       })
+
+      messagesUnsub.current = onValue(ref(db, `groups/${groupCode}/messages`), (snap) => {
+        const val = snap.val()
+        const list = val
+          ? Object.entries(val)
+              .map(([key, m]) => ({ key, ...m }))
+              .sort((a, b) => a.ts - b.ts)
+              .slice(-100)
+          : []
+        setMessages(list)
+      })
+
       setScreen('tracker')
     },
     [pushLocation]
   )
+
+  const sendMessage = (text) => {
+    if (!code) return
+    push(ref(db, `groups/${code}/messages`), {
+      id: myId.current,
+      name,
+      emoji,
+      color,
+      text,
+      ts: Date.now(),
+    }).catch((e) => console.warn('Message send failed', e))
+  }
 
   const handleCreate = () => {
     if (!name.trim()) {
@@ -142,13 +208,23 @@ export default function App() {
   const leaveGroup = () => {
     if (watchId.current != null) navigator.geolocation.clearWatch(watchId.current)
     const meRef = ref(db, `groups/${code}/members/${myId.current}`)
+    const groupRef = ref(db, `groups/${code}`)
     onDisconnect(meRef).cancel().catch(() => {})
-    remove(meRef).catch(() => {})
+    onDisconnect(groupRef).cancel().catch(() => {})
+    // Last one out removes the whole group (members + messages).
+    if (friends.length === 0) {
+      remove(groupRef).catch(() => {})
+    } else {
+      remove(meRef).catch(() => {})
+    }
     if (unsubscribe.current) unsubscribe.current()
+    if (messagesUnsub.current) messagesUnsub.current()
     setFriends([])
+    setMessages([])
     setMyPos(null)
     setGpsStatus('idle')
     setCode('')
+    setView('radar')
     setScreen('home')
   }
 
@@ -240,6 +316,16 @@ export default function App() {
           </span>
         </div>
 
+        {/* Radar / Chat toggle */}
+        <div style={{ display: 'flex', gap: 8, padding: '8px 20px 4px', width: '100%', zIndex: 1 }}>
+          <button onClick={() => setView('radar')} style={tabStyle(view === 'radar')}>📡 Radar</button>
+          <button onClick={() => setView('chat')} style={tabStyle(view === 'chat')}>
+            💬 Chat{unread > 0 ? ` (${unread})` : ''}
+          </button>
+        </div>
+
+        {view === 'radar' && (
+          <>
         {!compassWorking && friends.length > 0 && (
           <div style={{ margin: '0 20px 12px', padding: '12px 16px', background: 'rgba(255,230,0,0.07)', border: '1px solid rgba(255,230,0,0.25)', borderRadius: 14, zIndex: 1, width: 'calc(100% - 40px)', display: 'flex', alignItems: 'center', gap: 12 }}>
             <span style={{ fontSize: 18 }}>🧭</span>
@@ -300,6 +386,13 @@ export default function App() {
               <FriendCard key={f.id} friend={f} myPos={myPos} compassHeading={heading} compassWorking={compassWorking} />
             ))}
           </div>
+        )}
+
+          </>
+        )}
+
+        {view === 'chat' && (
+          <ChatPanel messages={messages} myId={myId.current} myColor={color} onSend={sendMessage} />
         )}
 
         <div style={{ padding: '28px 24px 0', width: '100%', zIndex: 1, display: 'flex', justifyContent: 'center' }}>
