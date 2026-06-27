@@ -326,6 +326,10 @@ export default function App() {
           </button>
         </div>
 
+        <div style={{ padding: '0 20px 6px', fontSize: 11, color: 'rgba(255,255,255,0.28)', textAlign: 'center', lineHeight: 1.4, zIndex: 1 }}>
+          📱 Keep this screen open to stay on your crew&apos;s map
+        </div>
+
         {view === 'radar' && (
           <>
         {!compassWorking && friends.length > 0 && (
