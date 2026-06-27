@@ -10,7 +10,10 @@ import ChatPanel from './components/ChatPanel.jsx'
 import { useWakeLock } from './useWakeLock.js'
 
 // Bump this on each release; it shows on the home screen.
-const VERSION = 'v4.4.0'
+const VERSION = 'v4.5.0'
+
+// Drop members from the radar if we haven't seen an update in this long.
+const FRESH_MS = 3 * 60 * 1000
 
 // Load the saved profile (name/emoji/color) from previous visits.
 function loadProfile() {
@@ -58,6 +61,7 @@ export default function App() {
   const [view, setView] = useState('radar') // 'radar' | 'chat'
   const [messages, setMessages] = useState([])
   const [unread, setUnread] = useState(0)
+  const [codeCopied, setCodeCopied] = useState(false)
 
   const { heading, working, accuracy, requestPermission } = useCompass()
   useWakeLock(screen === 'tracker') // keep the screen awake while tracking
@@ -69,12 +73,16 @@ export default function App() {
   const unsubscribe = useRef(null)
   const messagesUnsub = useRef(null)
   const lastSeenMsgs = useRef(0)
+  const armedRef = useRef(null) // 'me' | 'group'
 
-  // Spinning radar sweep for the "scanning" empty state.
+  // Spinning radar sweep — only runs while the empty "scanning" state is on
+  // screen, so it doesn't re-render the whole app when friends are present.
+  const radarActive = screen === 'tracker' && view === 'radar' && friends.length === 0
   useEffect(() => {
+    if (!radarActive) return
     const id = setInterval(() => setRadarAngle((a) => (a + 1.5) % 360), 30)
     return () => clearInterval(id)
-  }, [])
+  }, [radarActive])
 
   // Remember the profile across visits.
   useEffect(() => {
@@ -130,6 +138,7 @@ export default function App() {
       const groupRef = ref(db, `groups/${groupCode}`)
       // Default: if we disconnect, remove just our own member record.
       onDisconnect(meRef).remove()
+      armedRef.current = 'me'
 
       watchId.current = navigator.geolocation.watchPosition(
         (position) => pushLocation(position, groupCode),
@@ -142,16 +151,26 @@ export default function App() {
 
       unsubscribe.current = onValue(ref(db, `groups/${groupCode}/members`), (snap) => {
         const val = snap.val()
-        const others = val ? Object.values(val).filter((m) => m.id !== myId.current) : []
+        // Exclude ourselves and any "ghost" members not seen in a while, so
+        // stale records don't haunt the list (or keep the group alive).
+        const others = val
+          ? Object.values(val).filter(
+              (m) => m.id !== myId.current && Date.now() - (m.lastSeen || 0) < FRESH_MS
+            )
+          : []
         setFriends(others)
-        // If we're the LAST member, our disconnect should wipe the whole group
-        // (members + messages) so nothing lingers. Otherwise just remove us.
-        if (others.length === 0) {
-          onDisconnect(meRef).cancel()
-          onDisconnect(groupRef).remove()
-        } else {
-          onDisconnect(groupRef).cancel()
-          onDisconnect(meRef).remove()
+        // If we're the LAST member, re-arm our disconnect to wipe the whole
+        // group. Only re-register when this actually changes — not every tick.
+        const desired = others.length === 0 ? 'group' : 'me'
+        if (armedRef.current !== desired) {
+          if (desired === 'group') {
+            onDisconnect(meRef).cancel()
+            onDisconnect(groupRef).remove()
+          } else {
+            onDisconnect(groupRef).cancel()
+            onDisconnect(meRef).remove()
+          }
+          armedRef.current = desired
         }
       })
 
@@ -227,6 +246,7 @@ export default function App() {
     setGpsStatus('idle')
     setCode('')
     setView('radar')
+    armedRef.current = null
     setScreen('home')
   }
 
@@ -244,6 +264,17 @@ export default function App() {
       }
     } catch {
       /* user cancelled or share failed — ignore */
+    }
+  }
+
+  // Copy just the group code (tap the code in the header).
+  const copyCode = async () => {
+    try {
+      await navigator.clipboard.writeText(code)
+      setCodeCopied(true)
+      setTimeout(() => setCodeCopied(false), 1500)
+    } catch {
+      /* clipboard blocked — ignore */
     }
   }
 
@@ -275,8 +306,15 @@ export default function App() {
         >
           <div>
             <span style={styles.label}>GROUP CODE</span>
-            <div style={{ fontFamily: "'Space Mono', monospace", fontSize: 22, fontWeight: 700, color: '#00FFD4', letterSpacing: '0.15em', textShadow: '0 0 12px #00FFD466' }}>
-              {code}
+            <div
+              onClick={copyCode}
+              title="Tap to copy"
+              style={{ fontFamily: "'Space Mono', monospace", fontSize: 22, fontWeight: 700, color: '#00FFD4', letterSpacing: '0.15em', textShadow: '0 0 12px #00FFD466', cursor: 'pointer' }}
+            >
+              {code}{' '}
+              <span style={{ fontSize: 12, color: codeCopied ? '#00FF88' : 'rgba(255,255,255,0.35)' }}>
+                {codeCopied ? '✓ copied' : '⧉'}
+              </span>
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
@@ -305,9 +343,9 @@ export default function App() {
         </div>
 
         <div style={{ padding: '8px 24px', width: '100%', zIndex: 1, display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div style={{ width: 7, height: 7, borderRadius: '50%', background: gpsStatus === 'active' ? '#00FF88' : '#FFE600', boxShadow: `0 0 6px ${gpsStatus === 'active' ? '#00FF88' : '#FFE600'}` }} />
-          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', letterSpacing: '0.05em' }}>
-            {gpsStatus === 'active' ? 'GPS ACTIVE' : 'GETTING LOCATION…'}
+          <div style={{ width: 7, height: 7, borderRadius: '50%', background: gpsStatus === 'active' ? '#00FF88' : gpsStatus === 'error' ? '#FF3D3D' : '#FFE600', boxShadow: `0 0 6px ${gpsStatus === 'active' ? '#00FF88' : gpsStatus === 'error' ? '#FF3D3D' : '#FFE600'}` }} />
+          <span style={{ fontSize: 11, color: gpsStatus === 'error' ? 'rgba(255,61,61,0.85)' : 'rgba(255,255,255,0.35)', letterSpacing: '0.05em' }}>
+            {gpsStatus === 'active' ? 'GPS ACTIVE' : gpsStatus === 'error' ? 'LOCATION BLOCKED' : 'GETTING LOCATION…'}
           </span>
           <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.2)', marginLeft: 8 }}>·</span>
           <span style={{ fontSize: 11, color: compassWorking ? 'rgba(0,255,136,0.5)' : 'rgba(255,230,0,0.5)', letterSpacing: '0.04em' }}>
@@ -317,6 +355,12 @@ export default function App() {
             {friends.length} {friends.length === 1 ? 'friend' : 'friends'}
           </span>
         </div>
+
+        {gpsStatus === 'error' && error && (
+          <div style={{ margin: '0 20px 8px', padding: '10px 14px', background: 'rgba(255,61,61,0.1)', border: '1px solid rgba(255,61,61,0.3)', borderRadius: 12, fontSize: 12, color: '#FF6B6B', lineHeight: 1.4, zIndex: 1, width: 'calc(100% - 40px)' }}>
+            {error}
+          </div>
+        )}
 
         {/* Radar / Chat toggle */}
         <div style={{ display: 'flex', gap: 8, padding: '8px 20px 4px', width: '100%', zIndex: 1 }}>
