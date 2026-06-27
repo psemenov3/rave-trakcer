@@ -7,9 +7,10 @@ import { useCompass, isCalibrated } from './useCompass.js'
 import FriendCard from './components/FriendCard.jsx'
 import CalibrationOverlay from './components/CalibrationOverlay.jsx'
 import ChatPanel from './components/ChatPanel.jsx'
+import { useWakeLock } from './useWakeLock.js'
 
 // Bump this on each release; it shows on the home screen.
-const VERSION = 'v4.3.0'
+const VERSION = 'v4.4.0'
 
 // Load the saved profile (name/emoji/color) from previous visits.
 function loadProfile() {
@@ -59,6 +60,7 @@ export default function App() {
   const [unread, setUnread] = useState(0)
 
   const { heading, working, accuracy, requestPermission } = useCompass()
+  useWakeLock(screen === 'tracker') // keep the screen awake while tracking
   // compassWorking now means "is the compass actually calibrated".
   const compassWorking = isCalibrated(working, accuracy)
 
